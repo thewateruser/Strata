@@ -13,6 +13,10 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
  * Tool locations can be overridden with Gradle properties (-Pname=value) or local.properties:
  *   aapt, dx, zipalign, apksigner        executables (defaults: Debian/Ubuntu packages on PATH)
  *   aaptPlatformJar                      android.jar used to link resources (any API >= 23)
+ *
+ * Signing: set STRATA_KEYSTORE, STRATA_KEYSTORE_PASSWORD, STRATA_KEY_ALIAS and STRATA_KEY_PASSWORD
+ * (environment variables or Gradle properties) to sign with a release key; otherwise the debug key
+ * in config/debug.keystore is used.
  */
 
 plugins {
@@ -20,8 +24,9 @@ plugins {
 }
 
 val appId = "app.strata.psd"
-val appVersionCode = 1
-val appVersionName = "1.0.0"
+// Release builds pass these from the git tag: -PversionName=1.2.0 -PversionCode=10200
+val appVersionName = (findProperty("versionName") as String?) ?: "1.0.0"
+val appVersionCode = (findProperty("versionCode") as String?)?.toInt() ?: 1
 val minSdk = 29
 val targetSdk = 36
 
@@ -153,6 +158,8 @@ val assembleApk = tasks.register("assembleApk") {
     dependsOn(dex, keystore)
     inputs.file(manifest); inputs.dir(resDir); inputs.file(out.map { it.file("classes.dex") })
     if (assetsDir.isDirectory) inputs.dir(assetsDir)
+    inputs.property("version", "$appVersionName/$appVersionCode")
+    inputs.property("signingKey", System.getenv("STRATA_KEYSTORE") ?: (findProperty("STRATA_KEYSTORE") as String?) ?: "debug")
     val apk = out.map { it.file("strata.apk") }
     outputs.file(apk)
     doLast {
@@ -174,9 +181,19 @@ val assembleApk = tasks.register("assembleApk") {
             "-F", unsigned.absolutePath)
         run(aapt, "add", unsigned.absolutePath, "classes.dex")
         run(zipalign, "-f", "-p", "4", unsigned.absolutePath, aligned.absolutePath)
-        run(apksigner, "sign", "--v2-signing-enabled", "true", "--v3-signing-enabled", "true", "--ks", debugKeystore.absolutePath, "--ks-pass", "pass:android",
-            "--key-pass", "pass:android", "--min-sdk-version", "$minSdk",
-            "--out", apk.get().asFile.absolutePath, aligned.absolutePath)
+        fun secret(name: String) = System.getenv(name)?.takeIf { it.isNotBlank() } ?: (findProperty(name) as String?)
+        val releaseKs = secret("STRATA_KEYSTORE")?.let { File(it) }?.takeIf { it.isFile }
+        val signArgs = if (releaseKs != null) {
+            logger.lifecycle("Signing with release key ${releaseKs.name}")
+            arrayOf("--ks", releaseKs.absolutePath, "--ks-pass", "env:STRATA_KEYSTORE_PASSWORD",
+                "--ks-key-alias", secret("STRATA_KEY_ALIAS") ?: throw GradleException("STRATA_KEY_ALIAS not set"),
+                "--key-pass", if (System.getenv("STRATA_KEY_PASSWORD").isNullOrBlank()) "env:STRATA_KEYSTORE_PASSWORD" else "env:STRATA_KEY_PASSWORD")
+        } else {
+            logger.lifecycle("Signing with the DEBUG key (set STRATA_KEYSTORE for release signing)")
+            arrayOf("--ks", debugKeystore.absolutePath, "--ks-pass", "pass:android", "--key-pass", "pass:android")
+        }
+        run(apksigner, "sign", "--v2-signing-enabled", "true", "--v3-signing-enabled", "true", *signArgs,
+            "--min-sdk-version", "$minSdk", "--out", apk.get().asFile.absolutePath, aligned.absolutePath)
         unsigned.delete(); aligned.delete()
         File(dir, "strata.apk.idsig").delete()
         logger.lifecycle("APK: ${apk.get().asFile}")

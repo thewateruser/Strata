@@ -54,6 +54,15 @@ sudo apt install aapt dalvik-exchange zipalign apksigner android-sdk-platform-23
 - APKs are signed with the debug key in `config/debug.keystore`.
 - Requirements: minSdk 29 (Android 10), targetSdk 36.
 
+### Releases
+
+Pushing a `v*` tag (`git tag v1.2.3 && git push origin v1.2.3`) runs `.github/workflows/release.yml`. The workflow builds the APK on Ubuntu, then publishes a GitHub Release with `strata-<version>.apk` and its SHA-256 checksum.
+- The version comes from the tag: versionCode is `major*10000 + minor*100 + patch`.
+- Release notes are taken from `docs/releases/<tag>.md`.
+- To sign with your own key, add the repository secrets `STRATA_KEYSTORE_BASE64`, `STRATA_KEYSTORE_PASSWORD`, `STRATA_KEY_ALIAS` and `STRATA_KEY_PASSWORD`. Without them, the debug key is used.
+
+The same environment variables work locally (`STRATA_KEYSTORE=/path/to/key.jks ...`).
+
 ### Engine tools (JVM)
 
 ```sh
