@@ -1,6 +1,7 @@
 name: Release
 
-# Push a tag like v1.2.3 to build the APK and publish a GitHub Release.
+# Push a tag like v1.2.3 — or run this workflow manually with a version — to build the APK and
+# publish a GitHub Release (a manual run creates the tag at the selected commit).
 # Optional release signing — add these repository secrets:
 #   STRATA_KEYSTORE_BASE64   base64 of the .jks keystore
 #   STRATA_KEYSTORE_PASSWORD keystore password
@@ -11,6 +12,11 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, without the v (e.g. 1.0.0)"
+        required: true
 
 permissions:
   contents: write
@@ -32,8 +38,13 @@ jobs:
           sudo apt-get install -y aapt dalvik-exchange zipalign apksigner android-sdk-platform-23
 
       - name: Version from tag
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          V="${GITHUB_REF_NAME#v}"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then TAG="v${INPUT_VERSION#v}"; else TAG="$GITHUB_REF_NAME"; fi
+          if ! [[ "$TAG" =~ ^v[0-9]+(\.[0-9]+){0,2}(-[0-9A-Za-z.]+)?$ ]]; then echo "Bad version: $TAG"; exit 1; fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          V="${TAG#v}"
           IFS=. read -r MA MI PA <<< "${V%%-*}"
           echo "VERSION=$V" >> "$GITHUB_ENV"
           echo "CODE=$(( ${MA:-0} * 10000 + ${MI:-0} * 100 + ${PA:-0} ))" >> "$GITHUB_ENV"
@@ -69,10 +80,10 @@ jobs:
           mkdir dist
           cp app/build/apk/strata.apk "dist/strata-$VERSION.apk"
           (cd dist && sha256sum "strata-$VERSION.apk" > "strata-$VERSION.apk.sha256")
-          NOTES="docs/releases/$GITHUB_REF_NAME.md"
+          NOTES="docs/releases/$TAG.md"
           [ -f "$NOTES" ] && cp "$NOTES" notes.md || echo "Strata $VERSION" > notes.md
           if [ "$SIGNING" = "debug" ]; then
             printf '\n\n> **Signing:** this APK is signed with the public debug key from the repository. Fine for sideloading; configure the release signing secrets before distributing widely.\n' >> notes.md
           fi
           PRE=""; case "$VERSION" in *-*) PRE="--prerelease";; esac
-          gh release create "$GITHUB_REF_NAME" dist/* --title "Strata $VERSION" --notes-file notes.md --target "$GITHUB_SHA" $PRE
+          gh release create "$TAG" dist/* --title "Strata $VERSION" --notes-file notes.md --target "$GITHUB_SHA" $PRE
